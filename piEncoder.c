@@ -13,19 +13,19 @@
 #define DRIVER_DESC   "Digital Encoder Driver for Raspberry Pi"
 #define MOD_VERSION "0.0.1"
 #define SHORT_DESC "encoder"
-#define INIT_INTERRUPT_PIN 20
+#define INIT_INTERRUPT_PIN 25
 // text below will be seen in 'cat /proc/interrupt' command
 #define INTERRUPT_DESC "piEncoder interrupt"
 #define LOG_PREFIX "piEncoder: "
 static struct timespec ts_start,ts_end,delta_time;
 short int piEncoder_open=0;
-int piEncoder_tick_irq=0;
+short int piEncoder_tick_irq=0;
 //Major device number
 static int major;
 //uDev data structures
 static struct class *piEncoder_class;
 static struct device *piEncoder_device;
-static unsigned long ticks, prevTicks;
+static unsigned long ticks;
 //File operation functions
 static int piEncoder_dev_open(struct inode *inode, struct file *file)
 {
@@ -43,13 +43,11 @@ static ssize_t piEncoder_dev_read(struct file *filp, char __user *buf, size_t le
 {
 	size_t nbytes;
 	enc_out_t output;
-   	unsigned long diffticks;
     	getnstimeofday(&ts_end);
-    	diffticks=ticks-prevTicks;
-	output.ticks=ticks;
-    	prevTicks=ticks;
     	delta_time=timespec_sub(ts_end,ts_start);
-    	output.dt=(delta_time.tv_nsec + (delta_time.tv_sec * (unsigned long)1E9 ));
+    	output.ticks=ticks;
+	ticks=0;
+	output.dt=(delta_time.tv_nsec + (delta_time.tv_sec * (unsigned long)1E9 ));
     	getnstimeofday(&ts_start);
 //calculate number of bytes to return
 	nbytes = sizeof(enc_out_t);
@@ -144,32 +142,33 @@ short int attachInterrupt(int pin, const char *desc, const char *devdesc, int tr
 
 //Setup interrupts for input pins
 int piEncoder_irq_config(void) {
-	if((piEncoder_tick_irq = attachInterrupt(INIT_INTERRUPT_PIN, INTERRUPT_DESC, NULL, IRQF_TRIGGER_RISING, tick_ISR)) > 0)
+	if((piEncoder_tick_irq = attachInterrupt(INIT_INTERRUPT_PIN, INTERRUPT_DESC, INTERRUPT_DESC, IRQF_TRIGGER_RISING, tick_ISR)) > 0)
         return 0;
     return -1;
 }
 
 //Detach interrupts and free GPIO pins on exit/unload
-void piEncoder_irq_release(int pin, short int irq, const char *devdesc) {
-	free_irq(irq, (void *)devdesc);
+void piEncoder_irq_release(int pin, short int *irq, const char *devdesc) {
+	printk(KERN_NOTICE LOG_PREFIX "Freed GPIO %i and IRQ %i\n",pin,*irq);
+	free_irq(*irq, (void *)devdesc);
 	gpio_free(pin);
+	*irq=0;
 	return;
 }
 //Called on insert/load, initializes everything via initializer function and checks for error in the process
 int piEncoder_init(void) {
     ticks=0;
-    prevTicks=0;
     printk(KERN_NOTICE "piEncoder: Module version " MOD_VERSION ", initializing...\n");
     if(piEncoder_init_devnode()!=0)
 	goto init3;
-    if(!piEncoder_irq_config())
+    if(piEncoder_irq_config()<0)
         goto init2;
     getnstimeofday(&ts_start);
     return 0;
         
     init2: 
-        if(piEncoder_tick_irq)
-            piEncoder_irq_release(INIT_INTERRUPT_PIN, piEncoder_tick_irq, INTERRUPT_DESC);
+        if(piEncoder_tick_irq !=0 )
+            piEncoder_irq_release(INIT_INTERRUPT_PIN, &piEncoder_tick_irq, INTERRUPT_DESC);
 	piEncoder_cleanup_devnode();
     init3:
     return -1;
@@ -180,8 +179,8 @@ int piEncoder_init(void) {
 void piEncoder_cleanup(void) {
 	printk(KERN_NOTICE "piEncoder: Exiting...\n");
     piEncoder_cleanup_devnode();
-    if(piEncoder_tick_irq){
-     piEncoder_irq_release(INIT_INTERRUPT_PIN, piEncoder_tick_irq, INTERRUPT_DESC);
+    if(piEncoder_tick_irq != 0){
+     piEncoder_irq_release(INIT_INTERRUPT_PIN, &piEncoder_tick_irq, INTERRUPT_DESC);
      }
    }
 
