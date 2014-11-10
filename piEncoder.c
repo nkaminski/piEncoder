@@ -17,21 +17,20 @@
 // text below will be seen in 'cat /proc/interrupt' command
 #define INTERRUPT_DESC "piEncoder interrupt"
 #define LOG_PREFIX "piEncoder: "
-struct timespec ts_start,ts_end,delta_time;
+static struct timespec ts_start,ts_end,delta_time;
 short int piEncoder_open=0;
 int piEncoder_tick_irq=0;
-static struct timer_list timer;
 //Major device number
 static int major;
 //uDev data structures
 static struct class *piEncoder_class;
 static struct device *piEncoder_device;
+static unsigned long ticks, prevTicks;
 typedef struct {
-    long ticks;
-    long prevTicks;
-    double tickrate;
+    unsigned long ticks;
+    unsigned long dt;
     } enc_out_t;
-static enc_out_t output;
+
 //File operation functions
 static int piEncoder_dev_open(struct inode *inode, struct file *file)
 {
@@ -48,6 +47,15 @@ static int piEncoder_dev_release(struct inode *inode, struct file *file)
 static ssize_t piEncoder_dev_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
 {
 	size_t nbytes;
+	enc_out_t output;
+   	unsigned long diffticks;
+    	getnstimeofday(&ts_end);
+    	diffticks=ticks-prevTicks;
+	output.ticks=ticks;
+    	prevTicks=ticks;
+    	delta_time=timespec_sub(ts_end,ts_start);
+    	output.dt=(delta_time.tv_nsec + (delta_time.tv_sec * (unsigned long)1E9 ));
+    	getnstimeofday(&ts_start);
 //calculate number of bytes to return
 	nbytes = sizeof(enc_out_t);
 	//printk( "piEncoder: Copying %d bytes of data to userland\n", (int)nbytes);
@@ -94,21 +102,12 @@ void piEncoder_cleanup_devnode(void)
 	return unregister_chrdev(major, SHORT_DESC);
 }
 
-void timer_callback( unsigned long data )
-{
-    getnstimeofday(&ts_end);
-    long diffticks;
-    diffticks=output.ticks-output.prevTicks;
-    delta_time=timespec_sub(ts_end,ts_start);
-    printk( "timer_callback called (%ld).\n", timespec_to_ns(&delta_time) );
-    mod_timer(&timer, jiffies + msecs_to_jiffies(1000));
-    getnstimeofday(&ts_start);
-}
+
 static irqreturn_t tick_ISR(int irq, void *dev_id, struct pt_regs *regs) {
 	unsigned long flags;
 	// disable hard interrupts (remember them in flag 'flags')
 	local_irq_save(flags);
-   	output.ticks++;
+   	ticks++;
     // restore hard interrupts
 	local_irq_restore(flags);
 	return IRQ_HANDLED;
@@ -161,38 +160,22 @@ void piEncoder_irq_release(int pin, short int irq, const char *devdesc) {
 	gpio_free(pin);
 	return;
 }
-int piEncoder_timer_init(void){
-setup_timer(&timer,timer_callback,0);
-mod_timer(&timer, jiffies + msecs_to_jiffies(1000));
-return 0;
-}
-int piEncoder_timer_cleanup(void){
-del_timer(&timer);
-return 0;
-}
-
 //Called on insert/load, initializes everything via initializer function and checks for error in the process
 int piEncoder_init(void) {
-    output.ticks=0;
-    output.prevTicks=0;
-    output.tickrate=0;
-	printk(KERN_NOTICE "piEncoder: Module version " MOD_VERSION ", initializing...\n");
+    ticks=0;
+    prevTicks=0;
+    printk(KERN_NOTICE "piEncoder: Module version " MOD_VERSION ", initializing...\n");
     if(piEncoder_init_devnode()!=0)
 	goto init3;
-    if(!piEncoder_irq_config())
-        goto init2;
 //    if(!piEncoder_irq_config())
 //        goto init2;
-    if(piEncoder_timer_init())
-        goto init1;
     getnstimeofday(&ts_start);
     return 0;
         
-    init1:
-        piEncoder_timer_cleanup();
     init2: 
         if(piEncoder_tick_irq)
             piEncoder_irq_release(INIT_INTERRUPT_PIN, piEncoder_tick_irq, INTERRUPT_DESC);
+	piEncoder_cleanup_devnode();
     init3:
     return -1;
 
@@ -202,11 +185,9 @@ int piEncoder_init(void) {
 void piEncoder_cleanup(void) {
 	printk(KERN_NOTICE "piEncoder: Exiting...\n");
     piEncoder_cleanup_devnode();
-    del_timer(&timer);
     if(piEncoder_tick_irq){
      piEncoder_irq_release(INIT_INTERRUPT_PIN, piEncoder_tick_irq, INTERRUPT_DESC);
      }
-    piEncoder_timer_cleanup();
    }
 
 // Kernel functions that must be supplied with a modules init and exit function pointers
