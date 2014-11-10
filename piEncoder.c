@@ -172,6 +172,8 @@ int piEncoder_init(void) {
     output.prevTicks=0;
     output.tickrate=0;
 	printk(KERN_NOTICE "piEncoder: Module version " MOD_VERSION ", initializing...\n");
+    if(!piEncoder_init_devnode())
+	goto init3;
     if(!piEncoder_irq_config())
         goto init2;
     if(!piEncoder_timer_init()){
@@ -183,6 +185,7 @@ int piEncoder_init(void) {
     init2: 
         if(piEncoder_tick_irq)
             piEncoder_irq_release(INIT_INTERRUPT_PIN, piEncoder_tick_irq, INTERRUPT_DESC);
+    init3:
     return -1;
 
 }
@@ -190,6 +193,8 @@ int piEncoder_init(void) {
 //Kernel has already ensured that nobody is accessing our device.
 void piEncoder_cleanup(void) {
 	printk(KERN_NOTICE "piEncoder: Exiting...\n");
+    piEncoder_cleanup_devnode();
+    del_timer(&timer);
     if(piEncoder_tick_irq){
      piEncoder_irq_release(INIT_INTERRUPT_PIN, piEncoder_tick_irq, INTERRUPT_DESC);
      }
