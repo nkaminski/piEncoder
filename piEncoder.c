@@ -16,11 +16,11 @@
 #define INIT_INTERRUPT_PIN 20
 // text below will be seen in 'cat /proc/interrupt' command
 #define INTERRUPT_DESC "piEncoder interrupt"
-
-struct timespec ts_start,ts_end,test_of_time;
+#define LOG_PREFIX "piEncoder: "
+struct timespec ts_start,ts_end,delta_time;
 short int piEncoder_open=0;
 int piEncoder_tick_irq=0;
-//static struct timer_list timer;
+static struct timer_list timer;
 //Major device number
 static int major;
 //uDev data structures
@@ -29,9 +29,8 @@ static struct device *piEncoder_device;
 typedef struct {
     long ticks;
     long prevTicks;
-    int tickrate;
+    double tickrate;
     } enc_out_t;
-static struct timer_list timer;
 static enc_out_t output;
 //File operation functions
 static int piEncoder_dev_open(struct inode *inode, struct file *file)
@@ -97,8 +96,13 @@ void piEncoder_cleanup_devnode(void)
 
 void timer_callback( unsigned long data )
 {
-    printk( "my_timer_callback called (%ld).\n", jiffies );
-    mod_timer(timer, jiffies + msecs_to_jiffies(1000));
+    getnstimeofday(&ts_end);
+    long diffticks;
+    diffticks=output.ticks-output.prevTicks;
+    delta_time=timespec_sub(ts_end,ts_start);
+    printk( "timer_callback called (%ld).\n", timespec_to_ns(&delta_time) );
+    mod_timer(&timer, jiffies + msecs_to_jiffies(1000));
+    getnstimeofday(&ts_start);
 }
 static irqreturn_t tick_ISR(int irq, void *dev_id, struct pt_regs *regs) {
 	unsigned long flags;
@@ -158,11 +162,12 @@ void piEncoder_irq_release(int pin, short int irq, const char *devdesc) {
 	return;
 }
 int piEncoder_timer_init(void){
-setup_timer(timer,timer_callback,0);
-mod_timer(timer, jiffies + msecs_to_jiffies(1000));
+setup_timer(&timer,timer_callback,0);
+mod_timer(&timer, jiffies + msecs_to_jiffies(1000));
 return 0;
 }
 int piEncoder_timer_cleanup(void){
+del_timer(&timer);
 return 0;
 }
 
@@ -172,12 +177,13 @@ int piEncoder_init(void) {
     output.prevTicks=0;
     output.tickrate=0;
 	printk(KERN_NOTICE "piEncoder: Module version " MOD_VERSION ", initializing...\n");
-    if(!piEncoder_irq_config())
-        goto init2;
-    if(!piEncoder_timer_init()){
+    getnstimeofday(&ts_start);
+//    if(!piEncoder_irq_config())
+//        goto init2;
+    if(piEncoder_timer_init())
         goto init1;
-        return 0;
-        }
+    return 0;
+        
     init1:
         piEncoder_timer_cleanup();
     init2: 
@@ -193,6 +199,7 @@ void piEncoder_cleanup(void) {
     if(piEncoder_tick_irq){
      piEncoder_irq_release(INIT_INTERRUPT_PIN, piEncoder_tick_irq, INTERRUPT_DESC);
      }
+    piEncoder_timer_cleanup();
    }
 
 // Kernel functions that must be supplied with a modules init and exit function pointers
