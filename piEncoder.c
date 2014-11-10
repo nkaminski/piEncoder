@@ -3,11 +3,11 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/gpio.h>
-#include <linux/timer.h>
 #include <linux/fs.h>
 #include <asm/uaccess.h>
 #include <linux/device.h>
 #include <linux/ktime.h>
+#include "piEncoder.h"
 // Preprocessor defined constants
 #define DRIVER_AUTHOR "Nash Kaminski"
 #define DRIVER_DESC   "Digital Encoder Driver for Raspberry Pi"
@@ -26,11 +26,6 @@ static int major;
 static struct class *piEncoder_class;
 static struct device *piEncoder_device;
 static unsigned long ticks, prevTicks;
-typedef struct {
-    unsigned long ticks;
-    unsigned long dt;
-    } enc_out_t;
-
 //File operation functions
 static int piEncoder_dev_open(struct inode *inode, struct file *file)
 {
@@ -167,8 +162,8 @@ int piEncoder_init(void) {
     printk(KERN_NOTICE "piEncoder: Module version " MOD_VERSION ", initializing...\n");
     if(piEncoder_init_devnode()!=0)
 	goto init3;
-//    if(!piEncoder_irq_config())
-//        goto init2;
+    if(!piEncoder_irq_config())
+        goto init2;
     getnstimeofday(&ts_start);
     return 0;
         
